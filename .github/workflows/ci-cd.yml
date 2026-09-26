@@ -1,0 +1,27 @@
+name: Terraform CI
+
+on:
+  push:
+    branches: [testbranch]
+  pull_request:
+    branches: [testbranch]
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: "Terrform RF"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Format check
+        run: terraform fmt -check
+
+      - name: Init
+        run: terraform init -backend=false
+
+      - name: Validate
+        run: terraform validate
