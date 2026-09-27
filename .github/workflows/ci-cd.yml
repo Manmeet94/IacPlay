@@ -1,4 +1,4 @@
-name: Terraform CI
+name: Static Site CI-CD
 
 on:
   push:
@@ -6,22 +6,72 @@ on:
   pull_request:
     branches: [testbranch]
 
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: "true"
+
 jobs:
-  terraform:
+  plan:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: "Terrform RF"
+        working-directory: terraform
     steps:
       - uses: actions/checkout@v4
-
       - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check
+      - run: terraform init
+      - run: terraform validate
+      - run: terraform plan -out=tfplan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/tfplan
 
-      - name: Format check
-        run: terraform fmt -check
+  apply:
+    needs: plan
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: terraform
+      - run: terraform apply -auto-approve tfplan
 
-      - name: Init
-        run: terraform init -backend=false
+      - name: Get storage name
+        id: tf
+        run: echo "storage=$(terraform output -raw storage_name)" >> $GITHUB_OUTPUT
 
-      - name: Validate
-        run: terraform validate
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Upload website
+        working-directory: site
+        run: |
+          az storage blob upload-batch \
+            --account-name ${{ steps.tf.outputs.storage }} \
+            --destination '$web' \
+            --source . \
+            --overwrite \
+            --auth-mode login
+
+      - name: Show URL
+        run: terraform output site_url
